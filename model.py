@@ -54,12 +54,12 @@ class Model(nn.Module):
         self.gru = nn.GRU(embedding_dim, rnn_units, batch_first=True)
         self.fc = nn.Linear(rnn_units, vocab_size)
 
-    def forward(self, x):
+    def forward(self, x, hidden):
         x = self.embedding(x)
-        x, _ = self.gru(x)
+        x, hidden = self.gru(x, hidden)
         x = self.fc(x)
 
-        return x
+        return x, hidden
 
 # Create DirectML device
 device = torch_directml.device()
@@ -68,33 +68,52 @@ model = Model(vocab_size, embedding_dim, rnn_units).to(device)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters())
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
 
 EPOCHS = 10
+best_loss = float('inf')
 
 for epoch in range(EPOCHS):
+    hidden = None
+
     for batch, (input_example, target_example) in enumerate(dataloader):
         input_example = input_example.to(device)
         target_example = target_example.to(device)
 
-        output = model(input_example)
+        output, hidden = model(input_example, hidden)
+        hidden = hidden.detach()
+
         loss = criterion(output.transpose(1, 2), target_example)
 
         optimizer.zero_grad()
         loss.backward()
+        
+        # Gradient clipping
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
+
         optimizer.step()
 
-    print(f'Epoch {epoch + 1}, Loss: {loss.item()}')
+        # Model checkpointing
+        if loss.item() < best_loss:
+            best_loss = loss.item()
+            torch.save(model.state_dict(), 'model.pth')
     
+    # Learning rate scheduler
+    scheduler.step(loss)
+
+    print(f'Epoch {epoch + 1}, Loss: {loss.item()}')
+
 import torch.nn.functional as F
 
-def generate_text(model, start_string, num_generate = 10000):
+def generate_text(model, start_string, num_generate = 10000, temperature=1.0):
     input_eval = torch.tensor([char2idx[s] for s in start_string]).unsqueeze(0).to(device)
     text_generated = []
+    hidden = None
 
     for i in range(num_generate):
-        predictions = model(input_eval)
+        predictions, hidden = model(input_eval, hidden)
         predictions = predictions.squeeze(0).cpu().detach().numpy()
-        probabilities = F.softmax(torch.from_numpy(predictions[-1]), dim=0).numpy()
+        probabilities = F.softmax(torch.from_numpy(predictions[-1]/temperature), dim=0).numpy()
 
         predicted_id = np.random.choice(range(vocab_size), p=probabilities)
         input_eval = torch.tensor([[predicted_id]], device=device)
