@@ -3,10 +3,6 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import torch_directml # Import DirectML
-import logging
-import time
-
-logging.basicConfig(level=logging.INFO)
 
 with open('data/input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
@@ -19,7 +15,7 @@ idx2char = np.array(vocab)
 
 text_as_int = np.array([char2idx[c] for c in text])
 
-seq_length = 200
+seq_length = 150
 
 def create_sequences(text_as_int, seq_length):
     num_sequences = len(text)//(seq_length+1)
@@ -43,14 +39,14 @@ class CharDataset(Dataset):
         sequence = self.sequences[idx]
         return sequence[:-1], sequence[1:]
 
-BATCH_SIZE = 32
+BATCH_SIZE = 16
 
 dataset = CharDataset(sequences)
-dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True, num_workers=4)
+dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True, num_workers=6)
 
 vocab_size = len(vocab)
-embedding_dim = 256
-rnn_units = 1024
+embedding_dim = 128
+rnn_units = 4096
 
 class Model(nn.Module):
     def __init__(self, vocab_size, embedding_dim, rnn_units):
@@ -76,18 +72,13 @@ criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters())
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
 
-EPOCHS = 10
+EPOCHS = 100
 best_loss = float('inf')
-
-start_time_total = time.time()
 
 for epoch in range(EPOCHS):
     hidden = None
-    epoch_start_time = time.time()
-    epoch_loss = 0
 
     for batch, (input_example, target_example) in enumerate(dataloader):
-        batch_start_time = time.time()
         input_example = input_example.to(device)
         target_example = target_example.to(device)
 
@@ -95,7 +86,6 @@ for epoch in range(EPOCHS):
         hidden = hidden.detach()
 
         loss = criterion(output.transpose(1, 2), target_example)
-        epoch_loss += loss.item()
 
         optimizer.zero_grad()
         loss.backward()
@@ -109,17 +99,11 @@ for epoch in range(EPOCHS):
         if loss.item() < best_loss:
             best_loss = loss.item()
             torch.save(model.state_dict(), 'model.pth')
-        
-        batch_end_time = time.time()
-        logging.info(f'Epoch: {epoch + 1}, Batch: {batch + 1}, Loss: {loss.item()}, Batch time: {batch_end_time - batch_start_time}s')
     
     # Learning rate scheduler
     scheduler.step(loss)
-    epoch_end_time = time.time()
-    logging.info(f'Epoch {epoch + 1}, Loss: {epoch_loss / len(dataloader)}, Epoch time: {epoch_end_time - epoch_start_time}s')
 
-end_time_total = time.time()
-logging.info(f'Total training time: {end_time_total - start_time_total}s')
+    print(f'Epoch {epoch + 1}, Loss: {loss.item()}')
 
 import torch.nn.functional as F
 

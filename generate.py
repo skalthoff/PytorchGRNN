@@ -16,8 +16,10 @@ class Model(nn.Module):
         x = self.fc(x)
         return x, hidden
 
-with open('data/samples.txt', 'r') as f:
+
+with open('data/input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
+    text = text.encode("ascii", errors="ignore").decode()
 
 vocab = sorted(set(text))
 
