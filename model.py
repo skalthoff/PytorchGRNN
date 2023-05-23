@@ -3,9 +3,14 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import torch_directml # Import DirectML
+import logging
+import time
 
-with open('data/samples.txt', 'r') as f:
+logging.basicConfig(level=logging.INFO)
+
+with open('data/input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
+    text = text.encode("ascii", errors="ignore").decode()
 
 vocab = sorted(set(text))
 
@@ -14,7 +19,7 @@ idx2char = np.array(vocab)
 
 text_as_int = np.array([char2idx[c] for c in text])
 
-seq_length = 100
+seq_length = 200
 
 def create_sequences(text_as_int, seq_length):
     num_sequences = len(text)//(seq_length+1)
@@ -38,10 +43,10 @@ class CharDataset(Dataset):
         sequence = self.sequences[idx]
         return sequence[:-1], sequence[1:]
 
-BATCH_SIZE = 64
+BATCH_SIZE = 32
 
 dataset = CharDataset(sequences)
-dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
+dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True, num_workers=4)
 
 vocab_size = len(vocab)
 embedding_dim = 256
@@ -52,6 +57,7 @@ class Model(nn.Module):
         super(Model, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         self.gru = nn.GRU(embedding_dim, rnn_units, batch_first=True)
+
         self.fc = nn.Linear(rnn_units, vocab_size)
 
     def forward(self, x, hidden):
@@ -73,10 +79,15 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
 EPOCHS = 10
 best_loss = float('inf')
 
+start_time_total = time.time()
+
 for epoch in range(EPOCHS):
     hidden = None
+    epoch_start_time = time.time()
+    epoch_loss = 0
 
     for batch, (input_example, target_example) in enumerate(dataloader):
+        batch_start_time = time.time()
         input_example = input_example.to(device)
         target_example = target_example.to(device)
 
@@ -84,6 +95,7 @@ for epoch in range(EPOCHS):
         hidden = hidden.detach()
 
         loss = criterion(output.transpose(1, 2), target_example)
+        epoch_loss += loss.item()
 
         optimizer.zero_grad()
         loss.backward()
@@ -97,15 +109,21 @@ for epoch in range(EPOCHS):
         if loss.item() < best_loss:
             best_loss = loss.item()
             torch.save(model.state_dict(), 'model.pth')
+        
+        batch_end_time = time.time()
+        logging.info(f'Epoch: {epoch + 1}, Batch: {batch + 1}, Loss: {loss.item()}, Batch time: {batch_end_time - batch_start_time}s')
     
     # Learning rate scheduler
     scheduler.step(loss)
+    epoch_end_time = time.time()
+    logging.info(f'Epoch {epoch + 1}, Loss: {epoch_loss / len(dataloader)}, Epoch time: {epoch_end_time - epoch_start_time}s')
 
-    print(f'Epoch {epoch + 1}, Loss: {loss.item()}')
+end_time_total = time.time()
+logging.info(f'Total training time: {end_time_total - start_time_total}s')
 
 import torch.nn.functional as F
 
-def generate_text(model, start_string, num_generate = 10000, temperature=1.0):
+def generate_text(model, start_string, num_generate = 10000, temperature=0.8):
     input_eval = torch.tensor([char2idx[s] for s in start_string]).unsqueeze(0).to(device)
     text_generated = []
     hidden = None
